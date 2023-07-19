@@ -1,0 +1,18 @@
+[package]
+name = "abbreviation_detection"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "abbreviation_detection"
+crate-type = ["cdylib"]
+
+[dependencies.pyo3]
+version = "0.15.1"
+features = ["extension-module"]
+
+[dependencies]
+csv = "1.2.2"
+distance = "0.4.0"
+rand = "0.8.5"
+regex = "1.9.1"
