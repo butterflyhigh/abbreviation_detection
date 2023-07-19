@@ -1,8 +1,10 @@
 # How to use in Python
 
+0. Make sure Cargo is installed
 1. Create a VENV and activate it
-2. Pip install maturin
+2. `pip install maturin`
 3. `maturin build`
+4. `pip install target/wheels/(whatever's in here)`
 
 Then the package will be activated in the VENV
 
