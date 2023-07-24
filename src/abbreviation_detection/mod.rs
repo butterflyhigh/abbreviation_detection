@@ -1,4 +1,6 @@
-use std::{collections::HashMap, cmp::min};
+#![allow(dead_code)]
+
+use std::{collections::{BTreeMap, HashMap}, cmp::min, ops::Range};
 use regex::Regex;
 use csv;
 
@@ -73,33 +75,109 @@ pub fn build_freq_map(words: Vec<String>) -> HashMap<String, usize> {
     map
 }
 
-pub fn detect_acronyms(text: String, excl_dict: &Vec<String>, add_dict: &Vec<String>) -> Vec<String> {
+fn replace_with_space(text: &String, re: &Regex) -> (Vec<Range<usize>>, String) {
+    let matches = re.find_iter(text);
+    let ranges = matches.map(|x| x.range()).collect::<Vec<Range<usize>>>();
+
+    // replace matches with space
+    let mut repd = String::new();
+    for (i, c) in text.char_indices() {
+        match ranges.iter().find(|range| range.contains(&i)) {
+            Some(_) => {
+                repd.push(' ');
+            },
+            None => {
+                repd.push(c);
+            },
+        }
+    }
+
+    (ranges, repd)
+}
+
+pub fn detect_acronyms(text: String, excl_dict: &Vec<String>, add_dict: &Vec<String>) -> HashMap<(usize, usize), String> {
     let rm_re = Regex::new("[\\.\\?!,\\(\\)\\d:;-_+=|]").unwrap();
     let tag_re = Regex::new("\\*\\*[^\\[]*\\[[^\\]]*\\]").unwrap();
     let vowel_re = Regex::new("[aeuoi]").unwrap();
-    let no_tags = tag_re.replace_all(&text, "");
-    let clean_text = rm_re.replace_all(&no_tags, " ");
-    let words = clean_text.split(" ");
+
+    // returns the ranges of char indices that were replaced and the string with matched characters replaced with spaces
+    let (mut ranges, mapped_no_tags) = replace_with_space(&text, &tag_re);
+    let (cleaned_ranges, mapped_clean_text) = replace_with_space(&mapped_no_tags, &rm_re);
+    let words = mapped_clean_text.split(" ").map(|x| x.to_owned()).collect::<Vec<String>>();
+
+    ranges.extend(cleaned_ranges);
+
+    let mut impossible_bigrams_rdr = csv::Reader::from_path("./data/dict/bad_bigrams.csv").unwrap();
+    let mut impossible_bigrams_re_match = String::new();
+    let mut bigram_rcrds = impossible_bigrams_rdr.records();
+    impossible_bigrams_re_match.push_str(&bigram_rcrds.next().unwrap().unwrap()[0]);
+
+    for bigram in bigram_rcrds {
+        let txt = bigram.unwrap()[0].to_string();
+        impossible_bigrams_re_match.push_str(&format!("|{}", txt));
+    }
+
+    let bigram_re = Regex::new(&format!("[^ ]*({})[^ ]*", impossible_bigrams_re_match)).unwrap();
 
     // Rules:
-    // * Acronyms will always be < 5 characters
-    // * All words without vowls are acronyms
+    // * Acronyms will always be < 5 characters, unless they fit an "always" rule
     // * Acronyms won't be in dict
+    // * Every word in the medical abbreviation dictionary is an acronym
+    // * Every word with an illegal bigram is an acronym
 
-    let abbr: Vec<String> = words
-        .map(|word| word.to_lowercase().trim().to_string())
-        .filter(|word| 
-            word.len() > 1 
-            && word.len() < 5
-            && !excl_dict.contains(word)
-            && (
-                add_dict.contains(word)
-                || !vowel_re.is_match(word)
-            )
+    let abbrs: BTreeMap<usize, Option<String>> = words
+        .iter()
+        .enumerate()
+        .map(|(i, word)| (i, word.to_lowercase().trim().to_string()))
+        .map(|(i, word)| if word.len() >= 1 { (i, Some(word)) } else { (i, None) }) // len >= 1 is so important it gets its own filter, oohlala
+        .map(|(i, word)| 
+            {
+                match word {
+                    Some(abbr) => {
+                        if  (
+                                abbr.len() < 5 && 
+                                !excl_dict.contains(&abbr)
+                            ) || (
+                                bigram_re.is_match(&abbr) ||
+                                !vowel_re.is_match(&abbr) ||
+                                add_dict.contains(&abbr)
+                            ) {
+                                (i, Some(abbr))
+                        } else {
+                            (i, None)
+                        }
+                    }
+                    None => (i, None)
+                }
+            }
         )
-        .collect();
+        .collect(); // mmmm delicious spaghetti 
 
-    abbr
+    convert_to_hashmap(&abbrs, words)
+}
+
+fn convert_to_hashmap(input_map: &BTreeMap<usize, Option<String>>, words: Vec<String>) -> HashMap<(usize, usize), String> {
+    let mut result_map = HashMap::<(usize, usize), String>::new();
+    let mut start_idx = 0;
+    let mut end_idx;
+
+    for (key, value) in input_map {
+        match value {
+            Some(word) => {
+                let word_start = words[*key].find(word).unwrap_or(0);
+                start_idx += word_start;
+                end_idx = start_idx + word.len();
+                result_map.insert((start_idx, end_idx), word.to_owned());
+                start_idx = end_idx + 1;
+            }
+            None => {
+                let not_abbr_word = &words[*key];
+                start_idx += not_abbr_word.len() + 1;
+            }
+        }
+    }
+
+    result_map
 }
 
 pub fn initialize_dicts(excl_dict_path: String, add_dict_path: String) -> (Vec<String>, Vec<String>) {

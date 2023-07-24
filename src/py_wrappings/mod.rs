@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use pyo3::prelude::*;
 use crate as lib;
 
@@ -7,7 +9,7 @@ fn initialize_dicts(excl_dict_path: String, add_dict_path: String) -> PyResult<(
 }
 
 #[pyfunction]
-fn detect_acronyms(text: String, excl_dict: Vec<String>, add_dict: Vec<String>) -> Vec<String> {
+fn detect_acronyms(text: String, excl_dict: Vec<String>, add_dict: Vec<String>) -> HashMap<(usize, usize), String> {
     lib::detect_acronyms(text, &excl_dict, &add_dict)
 }
 
