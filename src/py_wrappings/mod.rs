@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-
+use std::collections::{HashMap, BTreeMap};
 use pyo3::prelude::*;
 use crate as lib;
 
@@ -14,8 +13,8 @@ fn detect_acronyms(text: String, excl_dict: Vec<String>, add_dict: Vec<String>) 
 }
 
 #[pyfunction]
-fn spellcheck_text(text: String, dict: Vec<String>) -> String {
-    lib::spellcheck_text(text, &dict)
+fn spellcheck_text(text: String, freqlist: BTreeMap<String, String>, dict: Vec<String>) -> String {
+    lib::spellcheck_text(text, &freqlist, &dict)
 }
 
 fn test_speed(notes_dir: String, excl_dict_path: String, add_dict_path: String) {

@@ -1,20 +1,20 @@
 #![allow(dead_code)]
 
 use std::{collections::{BTreeMap, HashMap}, cmp::min, ops::Range};
+use itertools::Itertools;
 use regex::Regex;
 use csv;
 
-pub fn spellcheck_text(text: String, dict: &Vec<String>) -> String {
+pub fn spellcheck_text(text: String, freqlist: &BTreeMap<String, String>, dict: &Vec<String>) -> String {
     let mut spellchecked_text = String::new();
     let sep_re = Regex::new("[^\\w\\/\\[\\]\\(\\)\\*|]").unwrap();
-    let special_re = Regex::new("[^\\/\\[\\]\\(\\)\\*|]").unwrap();
     let words = sep_re.split(&text).map(|x| x.to_string()).collect::<Vec<String>>();
 
     for word in words {
-        if word.len() <= 1 || special_re.is_match(&word) {
+        if word.len() <= 2 {
             spellchecked_text += &format!(" {word}");
         } else {
-            match find_levenshtein_matches(word.clone(), 1, dict) {
+            match find_levenshtein_matches(word.clone(), 1, &freqlist, dict) {
                 LevenshteinMatch::ExactMatch(txt) => {
                     spellchecked_text += &format!(" {txt}");
                 },
@@ -32,6 +32,72 @@ pub fn spellcheck_text(text: String, dict: &Vec<String>) -> String {
     }
 
     spellchecked_text
+}
+
+pub fn find_levenshtein_matches(word: String, threshold: usize, freqlist: &BTreeMap<String, String>, _dict: &Vec<String>) -> LevenshteinMatch {
+    let cleaned_word = word.to_lowercase().trim().to_string();
+
+    let freqlist_matches = levenshtein_match_dict(cleaned_word.clone(), threshold, &freqlist.iter().map(|(x, _)| x.to_owned()).collect_vec(), true);  
+
+    /* match freqlist_matches {
+        LevenshteinMatch::ApproximateMatches(v) => {
+            if v.len() < 1 {
+                return levenshtein_match_dict(cleaned_word, threshold, dict, false);
+            } else {
+                return LevenshteinMatch::ApproximateMatches(v)
+            }
+        }
+        LevenshteinMatch::ExactMatch(_) => {
+            return freqlist_matches;
+        }
+    } */
+
+    freqlist_matches
+}
+
+pub fn levenshtein_match_dict(cleaned_word: String, threshold: usize, dict: &Vec<String>, break_at_first: bool) -> LevenshteinMatch {
+    match dict.binary_search(&cleaned_word) {
+        Ok(_) => {
+            return LevenshteinMatch::ExactMatch(cleaned_word);
+        }
+        Err(_) => {
+            let mut res_vec = Vec::<String>::new();
+
+            // first search freqlist bc its more reliable
+            for row in dict {
+                let dict_word = row;
+                if cleaned_word.eq(dict_word) {
+                    return LevenshteinMatch::ExactMatch(cleaned_word);
+                } else {
+                    if damerau_levenshtein(&cleaned_word, &dict_word, threshold) <= threshold {
+                        res_vec.push(dict_word.to_owned());
+
+                        if break_at_first {
+                            return LevenshteinMatch::ApproximateMatches(res_vec);
+                        }
+                    }
+                }
+            }
+
+            return LevenshteinMatch::ApproximateMatches(res_vec);
+        }
+    }
+}
+
+pub fn build_freqlist(path: String) -> BTreeMap<String, String> {
+    let map = csv::Reader::from_path(path)
+        .unwrap()
+        .records()
+        .map(|x| x
+            .unwrap()
+            .iter()
+            .map(|y| y.to_string())
+            .collect_tuple()
+            .unwrap()
+        )
+        .collect::<BTreeMap<String, String>>();
+
+    map
 }
 
 pub fn find_most_likely_word(matches: Vec<String>, source_text: String) -> String {
@@ -119,29 +185,40 @@ pub fn detect_acronyms(text: String, excl_dict: &Vec<String>, add_dict: &Vec<Str
 
     let bigram_re = Regex::new(&format!("[^ ]*({})[^ ]*", impossible_bigrams_re_match)).unwrap();
 
+    let mut problematic_rdr = csv::Reader::from_path("./data/dict/problematic.csv").unwrap();
+    let problematic: Vec<String> = problematic_rdr.records().map(|x| x.unwrap()[0].to_string()).collect();
+
     // Rules:
     // * Acronyms will always be < 5 characters, unless they fit an "always" rule
     // * Acronyms won't be in dict
     // * Every word in the medical abbreviation dictionary is an acronym
     // * Every word with an illegal bigram is an acronym
 
+    // TODO: Make it so for words in both the add dict and the excl dict, decides based on popularity
+
     let abbrs: BTreeMap<usize, Option<String>> = words
         .iter()
         .enumerate()
         .map(|(i, word)| (i, word.to_lowercase().trim().to_string()))
-        .map(|(i, word)| if word.len() >= 1 { (i, Some(word)) } else { (i, None) }) // len >= 1 is so important it gets its own filter, oohlala
+        .map(|(i, word)| 
+            if word.len() > 1 { 
+                (i, Some(word)) 
+            } else { 
+                (i, None) 
+            }
+        ) // len >= 1 is so important it gets its own filter
         .map(|(i, word)| 
             {
                 match word {
                     Some(abbr) => {
-                        if  (
+                        if  ((
                                 abbr.len() < 5 && 
                                 !excl_dict.contains(&abbr)
                             ) || (
                                 bigram_re.is_match(&abbr) ||
                                 !vowel_re.is_match(&abbr) ||
                                 add_dict.contains(&abbr)
-                            ) {
+                            )) && !problematic.contains(&abbr) {
                                 (i, Some(abbr))
                         } else {
                             (i, None)
@@ -151,7 +228,7 @@ pub fn detect_acronyms(text: String, excl_dict: &Vec<String>, add_dict: &Vec<Str
                 }
             }
         )
-        .collect(); // mmmm delicious spaghetti 
+        .collect();
 
     convert_to_hashmap(&abbrs, words)
 }
@@ -195,31 +272,6 @@ pub fn initialize_dicts(excl_dict_path: String, add_dict_path: String) -> (Vec<S
         .collect::<Vec<String>>();
 
     (excl_dict, add_dict)
-}
-
-pub fn find_levenshtein_matches(word: String, threshold: usize, dict: &Vec<String>) -> LevenshteinMatch {
-    let cleaned_word = word.to_lowercase().trim().to_string();
-
-    match dict.binary_search(&cleaned_word) {
-        Ok(_) => {
-            return LevenshteinMatch::ExactMatch(cleaned_word);
-        }
-        Err(_) => {
-            let mut res_vec = Vec::<String>::new();
-
-            for row in dict {
-                if cleaned_word.eq(row) {
-                    return LevenshteinMatch::ExactMatch(cleaned_word);
-                } else {
-                    if damerau_levenshtein(&word, &row, threshold) <= threshold {
-                        res_vec.push(row.to_owned());
-                    }
-                }
-            }
-
-            return LevenshteinMatch::ApproximateMatches(res_vec);
-        }
-    }
 }
 
 pub fn damerau_levenshtein(s: &str, t: &str, breakpoint: usize) -> usize {
@@ -274,6 +326,23 @@ pub fn damerau_levenshtein(s: &str, t: &str, breakpoint: usize) -> usize {
 
 pub fn min4(a: usize, b: usize, c: usize, d: usize) -> usize {
    return min(min(min(a, b), c), d); 
+}
+
+pub fn generate_problematic() {
+    let mut rdr = csv::Reader::from_path("./data/dict/top_10k.csv").unwrap();
+    let mut writer = csv::Writer::from_path("./data/dict/problematic.csv").unwrap();
+    let (excl_dict, add_dict) = initialize_dicts("./data/dict/excl_dict.csv".into(), "./data/dict/med_abbr.csv".into());
+
+    for row in rdr.records() {
+        let word = row.unwrap()[0].to_string();
+
+        match detect_acronyms(word, &excl_dict, &add_dict).iter().last() {
+            Some((_, abbr)) => {
+                writer.write_record([abbr]).unwrap();
+            }
+            None => {}
+        }
+    }
 }
 
 #[derive(Debug)]

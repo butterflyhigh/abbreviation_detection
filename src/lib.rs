@@ -12,13 +12,15 @@ pub fn test_speed(notes_dir: String, excl_dict_path: String, add_dict_path: Stri
     let mut writer = csv::Writer::from_path("./tmp/spellchecked_notes.csv").unwrap();
     let (excl_dict, _add_dict) = initialize_dicts(excl_dict_path, add_dict_path);
 
+    let freqlist = build_freqlist("./data/dict/freqlist.csv".into());
+
     let mut times = Vec::<Duration>::new();
 
     for note in notes.records() {
         let text = note.unwrap()[0].to_string();
 
         let start = time::Instant::now();
-        let spellchecked = spellcheck_text(text, &excl_dict);
+        let spellchecked = spellcheck_text(text, &freqlist, &excl_dict);
         let end = time::Instant::now();
 
         writer.write_record([spellchecked]).unwrap();
